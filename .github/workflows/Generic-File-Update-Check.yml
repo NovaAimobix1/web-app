@@ -9,37 +9,36 @@ permissions:
   contents: write
   pull-requests: write
 
-env:
-  UPSTREAM_REPO: 'IRNova/Nova-Proxy'
-  UPSTREAM_BRANCH: 'main'
-  # List your target paths here (one path per line).
-  # Spaces inside file/folder names are supported.
-  TARGET_PATHS: |
-    worker.js
-    version.json
-
 jobs:
-  check-updates:
+  check-and-update:
     runs-on: ubuntu-latest
+
+    env:
+      UPSTREAM_REPO: 'IRNova/Nova-Proxy'
+      UPSTREAM_BRANCH: 'main'
+      UPDATE_MODE: ${{ vars.UPDATE_MODE }}
+      TARGET_PATHS: |
+        worker.js
+        version.json
+
     steps:
-      - name: Sync target paths and manage pull request
+      - name: Fetch and Apply Updates
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "Configuring git identity..."
+          echo "Configuring Git identity..."
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          echo "Cloning current repository..."
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" .
+          echo "Cloning target repository..."
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
 
-          # Read TARGET_PATHS line-by-line into an array safely
+          echo "Parsing target paths..."
           TARGET_ARRAY=()
           while IFS= read -r line || [ -n "$line" ]; do
-            # Trim leading/trailing whitespace
             trimmed="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             if [ -n "$trimmed" ]; then
               TARGET_ARRAY+=("$trimmed")
@@ -47,51 +46,60 @@ jobs:
           done <<< "$TARGET_PATHS"
 
           if [ ${#TARGET_ARRAY[@]} -eq 0 ]; then
-            echo "Error: TARGET_PATHS is empty."
+            echo "Error: TARGET_PATHS is empty." >&2
             exit 1
           fi
 
-          echo "Fetching upstream repository..."
-          git fetch "https://github.com/${UPSTREAM_REPO}.git" "$UPSTREAM_BRANCH"
+          echo "Fetching upstream repository: ${UPSTREAM_REPO} (${UPSTREAM_BRANCH})..."
+          git fetch "https://github.com/${UPSTREAM_REPO}.git" "${UPSTREAM_BRANCH}"
 
-          echo "Validating path existence in upstream..."
+          echo "Validating target paths in upstream..."
           for path in "${TARGET_ARRAY[@]}"; do
-            if ! git cat-file -e "FETCH_HEAD:$path" 2>/dev/null; then
-              echo "Error: Path '$path' does not exist in upstream branch '$UPSTREAM_BRANCH'."
+            if ! git cat-file -e "FETCH_HEAD:${path}" 2>/dev/null; then
+              echo "Error: Required path '${path}' does not exist in upstream." >&2
               exit 1
             fi
           done
 
-          echo "Checking out specified paths from upstream..."
+          echo "Checking out target files from upstream..."
           git checkout FETCH_HEAD -- "${TARGET_ARRAY[@]}"
 
-          # Check if working tree has staged or unstaged changes
+          echo "Checking for local modifications..."
           if [ -z "$(git status --porcelain)" ]; then
-            echo "No changes detected in target paths."
+            echo "No changes detected. Repository is up to date."
             exit 0
           fi
 
-          echo "Changes detected in target paths. Preparing Pull Request..."
-          BRANCH_NAME="auto-update-target-files"
+          echo "Detected updates in target files."
 
-          # Create or update branch and push changes
-          git checkout -B "$BRANCH_NAME"
-          git add "${TARGET_ARRAY[@]}"
-          git commit -m "chore: update target files from upstream"
-          git push --force-with-lease origin "$BRANCH_NAME"
-
-          # Check if an open PR already exists for this branch
-          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --state open --json number --jq '.[0].number')
-
-          if [ -n "$EXISTING_PR" ]; then
-            echo "Pull Request #$EXISTING_PR is already open and updated with new commits."
+          if [ "${UPDATE_MODE:-}" = "automatic" ]; then
+            echo "UPDATE_MODE is set to 'automatic'. Applying changes directly to main..."
+            git add "${TARGET_ARRAY[@]}"
+            git commit -m "chore: automated update target files from upstream [skip ci]"
+            git push origin main
+            echo "Changes successfully pushed to main branch."
           else
-            echo "Creating new Pull Request..."
-            gh pr create \
-              --base main \
-              --head "$BRANCH_NAME" \
-              --title "Automated Update: Target Files from Upstream" \
-              --body "Automated update detected changes in the configured target paths from upstream (\`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\`)." \
-              --label "dependencies" \
-              --label "automated pr"
+            echo "UPDATE_MODE is not 'automatic'. Falling back to Pull Request mode..."
+            BRANCH_NAME="auto-update-target-files"
+            git checkout -B "$BRANCH_NAME"
+            git add "${TARGET_ARRAY[@]}"
+            git commit -m "chore: update target files from upstream"
+            git push --force-with-lease origin "$BRANCH_NAME"
+
+            PR_TITLE="Automated Update: Target Files from Upstream"
+            PR_BODY="This is an automated pull request checking for and updating tracked files from upstream (${UPSTREAM_REPO})."
+
+            EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --state open --json number --jq '.[0].number')
+
+            if [ -n "$EXISTING_PR" ]; then
+              echo "Pull request #${EXISTING_PR} already exists and has been updated."
+            else
+              echo "Creating new pull request..."
+              gh pr create \
+                --title "$PR_TITLE" \
+                --body "$PR_BODY" \
+                --head "$BRANCH_NAME" \
+                --base main \
+                --label "dependencies,automated pr"
+            fi
           fi
