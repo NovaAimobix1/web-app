@@ -22,16 +22,19 @@ jobs:
   check-updates:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4.2.2
-        with:
-          fetch-depth: 0
-
-      - name: Fetch upstream and checkout target paths
-        id: process_paths
+      - name: Sync target paths and manage pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -e
+
+          echo "Configuring git identity..."
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "Cloning current repository..."
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" .
 
           # Read TARGET_PATHS line-by-line into an array safely
           TARGET_ARRAY=()
@@ -65,22 +68,30 @@ jobs:
           # Check if working tree has staged or unstaged changes
           if [ -z "$(git status --porcelain)" ]; then
             echo "No changes detected in target paths."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Changes detected in target paths."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-      - name: Create Pull Request
-        if: steps.process_paths.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
-        with:
-          commit-message: 'chore: update target files from upstream'
-          title: 'Automated Update: Target Files from Upstream'
-          body: |
-            Automated update detected changes in the configured target paths from upstream (`${{ env.UPSTREAM_REPO }}:${{ env.UPSTREAM_BRANCH }}`).
-          branch: 'auto-update-target-files'
-          delete-branch: true
-          labels: |
-            dependencies
-            automated pr
+          echo "Changes detected in target paths. Preparing Pull Request..."
+          BRANCH_NAME="auto-update-target-files"
+
+          # Create or update branch and push changes
+          git checkout -B "$BRANCH_NAME"
+          git add "${TARGET_ARRAY[@]}"
+          git commit -m "chore: update target files from upstream"
+          git push --force-with-lease origin "$BRANCH_NAME"
+
+          # Check if an open PR already exists for this branch
+          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --state open --json number --jq '.[0].number')
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Pull Request #$EXISTING_PR is already open and updated with new commits."
+          else
+            echo "Creating new Pull Request..."
+            gh pr create \
+              --base main \
+              --head "$BRANCH_NAME" \
+              --title "Automated Update: Target Files from Upstream" \
+              --body "Automated update detected changes in the configured target paths from upstream (\`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\`)." \
+              --label "dependencies" \
+              --label "automated pr"
+          fi
