@@ -2,7 +2,7 @@ name: Generic File Update Check
 
 on:
   schedule:
-    - cron: '25 21 * * *'
+    - cron: '45 21 * * *'
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
       TARGET_PATHS: |
         worker.js
         version.json
-        workflows/nova-update-check.yml
+        .github/workflows/nova-update-check.yml
 
     steps:
       - name: Fetch and Apply Updates
