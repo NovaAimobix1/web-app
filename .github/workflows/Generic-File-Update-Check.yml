@@ -2,7 +2,7 @@ name: Generic File Update Check
 
 on:
   schedule:
-    - cron: '10 22 * * *'
+    - cron: '30 20 * * *'
   workflow_dispatch:
 
 permissions:
