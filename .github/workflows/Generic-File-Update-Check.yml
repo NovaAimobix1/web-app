@@ -1,8 +1,14 @@
+# ==============================================================================
+# Workflow: Generic File Update Check
+# Version: 2026-09-17-02
+# Description: Syncs target files from upstream repository into current branch.
+# ==============================================================================
+
 name: Generic File Update Check
 
 on:
   schedule:
-    - cron: '30 20 * * *'
+    - cron: '30 20 * * *' # Runs daily at 20:30 UTC
   workflow_dispatch:
 
 permissions:
